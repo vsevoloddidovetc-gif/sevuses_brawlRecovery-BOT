@@ -1,96 +1,63 @@
 import os
 import logging
-from telegram import Update
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    MessageHandler,
-    ConversationHandler,
-    ContextTypes,
-    filters,
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, CallbackQueryHandler, MessageHandler, filters
+from google import genai
+
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 
-# Enable logging
-logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
+ai_client = genai.Client()
 
-TAG, NAME, TROPHIES, CLUB, DEVICE, REASON = range(6)
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await update.message.reply_text(
-        "Welcome to Brawl Recovery Assistant!\n\n"
-        "I'll help format your request for Supercell Support.\n\n"
-        "First, what is your Player Tag? (e.g., #ABC1234)"
+# /start command with interactive buttons
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [InlineKeyboardButton("🔄 Recover Account", callback_data="recover")],
+        [InlineKeyboardButton("❓ Common Issues", callback_data="faq")],
+        [InlineKeyboardButton("📞 Contact Support", callback_data="support")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    welcome_text = (
+        "👋 Welcome to **Brawl Stars Recovery Bot**!\n\n"
+        "I can help you navigate account recovery steps or answer your questions. "
+        "Choose an option below:"
     )
-    return TAG
+    
+    await update.message.reply_text(welcome_text, reply_markup=reply_markup, parse_mode="Markdown")
 
-async def get_tag(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data['tag'] = update.message.text
-    await update.message.reply_text("Got it! What was your exact In-Game Nickname?")
-    return NAME
+# Handle button clicks
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    if query.data == "recover":
+        await query.edit_message_text(text="🔄 Let's start your recovery! Please send me your old account Tag (e.g., #ABC123XYZ).")
+    elif query.data == "faq":
+        await query.edit_message_text(text="❓ **Common Issues:**\n- Lost Supercell ID? Make sure you check your email spam folder.\n- Banned account? Support requests must go through the in-game help menu.")
+    elif query.data == "support":
+        await query.edit_message_text(text="📞 For direct assistance, please describe your issue here, and our AI assistant will help you out!")
 
-async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data['name'] = update.message.text
-    await update.message.reply_text("How many Trophies did the account roughly have?")
-    return TROPHIES
-
-async def get_trophies(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data['trophies'] = update.message.text
-    await update.message.reply_text("What was your Club Name? (Send 'None' if you weren't in one):")
-    return CLUB
-
-async def get_club(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data['club'] = update.message.text
-    await update.message.reply_text("What exact Device Model did you play on? (e.g., Samsung M14):")
-    return DEVICE
-
-async def get_device(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data['device'] = update.message.text
-    await update.message.reply_text("Briefly explain how access was lost (e.g., changed phones, device reset):")
-    return REASON
-
-async def finish(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    reason = update.message.text
-    d = context.user_data
-
-    summary = (
-        "<b>Copy and paste this message into Supercell Support:</b>\n\n"
-        "----------------------------------------\n"
-        f"<b>Player Tag:</b> {d['tag']}\n"
-        f"<b>Nickname:</b> {d['name']}\n"
-        f"<b>Trophies:</b> {d['trophies']}\n"
-        f"<b>Club:</b> {d['club']}\n"
-        f"<b>Device:</b> {d['device']}\n"
-        f"<b>Reason:</b> {reason}\n"
-        "----------------------------------------\n\n"
-        "<i>Tip: Keep your Google Play or App Store purchase receipts ready if you ever bought Gems or Passes!</i>"
+# AI chat handler for normal text messages
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_message = update.message.text
+    
+    response = ai_client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=f"You are a helpful and smart assistant for Brawl Stars account recovery and support. Answer this user clearly and concisely: {user_message}",
     )
+    
+    await update.message.reply_text(response.text)
 
-    await update.message.reply_html(summary)
-    return ConversationHandler.END
-
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await update.message.reply_text("Cancelled. Send /start to begin again.")
-    return ConversationHandler.END
-
-if __name__ == '__main__':
-    # Paste your raw token string from @BotFather right inside the quotes below:
-    BOT_TOKEN = "8849102786:AAFUmBjrkKByrGSGerX8_GAjfzBgYAtkqXY"
-
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
-
-    conv_handler = ConversationHandler(
-        entry_points=[CommandHandler('start', start)],
-        states={
-            TAG: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_tag)],
-            NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_name)],
-            TROPHIES: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_trophies)],
-            CLUB: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_club)],
-            DEVICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_device)],
-            REASON: [MessageHandler(filters.TEXT & ~filters.COMMAND, finish)],
-        },
-        fallbacks=[CommandHandler('cancel', cancel)],
-    )
-
-    app.add_handler(conv_handler)
-    print("Bot is starting...")
-    app.run_polling()
+if __name__ == "__main__":
+    token = os.environ.get("BOT_TOKEN")
+    
+    application = ApplicationBuilder().token(token).build()
+    
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CallbackQueryHandler(button_handler))
+    application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
+    
+    print("Bot is running...")
+    application.run_polling()
